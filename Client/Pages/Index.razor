@@ -1,0 +1,126 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
+
+@if (!IsConnected) {
+    <div class="container text-light">
+        <div class="mb-3">
+            <label for="username" class="form-label">Enter your username:</label>
+            <input type="text" id="username" class="form-control text-dark" @bind="username" />
+        </div>
+        <div class="mb-3 d-flex justify-content-center align-items-center p-3 translucent-bg">
+            <div class="row-cols-1 text-center px-3">
+                <button class="btn btn-secondary btn-outline-light mt-2" @onclick="CreateChat">Create Chat</button>
+            </div>
+            <div class="separator mx-3"></div>
+            <div class="row-cols-1 text-center px-3">
+                <label for="invitationCode" class="form-label">Enter invitation code:</label>
+                <input type="text" id="invitationCode" class="form-control text-dark" @bind="invitationCode" />
+                <button class="btn btn-secondary btn-outline-light mt-2" @onclick="JoinChat">Join Chat</button>
+            </div>
+        </div>
+    </div>
+}
+else {
+    <div class="container text-light">
+        <div class="mb-3">
+            <textarea class="form-control text-dark" readonly style="height: 700px;" @ref="TextAreaRef">@messages</textarea>
+        </div>
+        <div class="mb-3 d-flex justify-content-center align-items-center p-3 translucent-bg">
+            <div class="row-cols-1 text-center d-flex flex-column align-items-center" style="width: 100%;">
+                <input @bind-value="message"
+                       @bind-value:event="oninput"
+                       @onkeyup="HandleInput"
+                       class="form-control text-dark mb-2"
+                       style="width: 80%;"
+                       placeholder="Type your message here..." />
+                <div class="d-flex justify-content-between" style="width: 80%;">
+                    <button class="btn btn-secondary btn-outline-light mt-2" @onclick="Send" style="width: 50%;" disabled="@(!IsConnected)">
+                        Send
+                    </button>
+                    <button class="btn btn-danger btn-outline-light mt-2" @onclick="LeaveChat" style="width: 30%; margin-left: auto;">
+                        Leave
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+}
+
+
+
+
+@code {
+    private HubConnection? hubConnection;
+    private string messages = string.Empty;
+    private string username = string.Empty;
+    private string message = string.Empty;
+    private string warning = string.Empty;
+    ElementReference TextAreaRef;
+    public bool IsConnected => hubConnection?.State == HubConnectionState.Connected;
+    private string invitationCode = string.Empty;
+
+    private async Task CreateChat() {
+        invitationCode = Guid.NewGuid().ToString().Substring(0, 6);
+        messages += $"Party Code: {invitationCode} (This code is only visible to you).\n";
+        await Connect();
+    }
+
+    private async Task JoinChat() {
+        if (string.IsNullOrWhiteSpace(invitationCode)) {
+            warning = "Invalid party code\n";
+            StateHasChanged();
+            return;
+        }
+        await Connect();
+    }
+
+    private async Task Connect() {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri($"/chathub?username={username}&invitationCode={invitationCode}"))
+            .Build();
+
+        hubConnection.On<string, string>("ReceiveMessage", (user, message) => {
+            var msg = $"{(string.IsNullOrEmpty(user) ? "" : user + ": ")}{message}";
+            messages += msg + "\n";
+            JSRuntime.InvokeVoidAsync("scrollToBottom", TextAreaRef);
+            StateHasChanged();
+        });
+
+        await hubConnection.StartAsync();
+    }
+
+    private async Task Send() {
+        if (hubConnection != null) {
+            Console.WriteLine($"Sending message: {message}"); // Debug line
+            await hubConnection.SendAsync("AddMessageToChat", username, message, invitationCode);
+            message = string.Empty;
+        }
+    }
+
+    private async Task LeaveChat() {
+        if (hubConnection != null) {
+            await hubConnection.StopAsync();
+            await hubConnection.DisposeAsync();
+            hubConnection = null; // Clear the connection
+            messages += $"{username} left the chat.\n";
+            invitationCode = string.Empty; // Reset invitation code
+            StateHasChanged(); // Trigger UI refresh
+        }
+    }
+
+
+    private async Task HandleInput(KeyboardEventArgs args) {
+        if (args.Key.Equals("Enter")) {
+            await Send();
+        }
+    }
+
+    public async ValueTask DisposeAsync() {
+        if (hubConnection != null) {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}
